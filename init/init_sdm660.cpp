@@ -34,7 +34,10 @@
 #include <sys/sysinfo.h>
 #include <unistd.h>
 
+#include <android-base/file.h>
+#include <android-base/logging.h>
 #include <android-base/properties.h>
+#include <android-base/strings.h>
 #define _REALLY_INCLUDE_SYS__SYSTEM_PROPERTIES_H_
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -94,6 +97,61 @@ void property_override(char const prop[], char const value[], bool add = true)
     }
 }
 
+static void init_clover_properties()
+{
+    if (android::base::GetProperty("ro.product.vendor.device", "") != "clover") {
+        return;
+    }
+
+    std::string panel_info;
+    if (!android::base::ReadFileToString(
+            "/sys/devices/virtual/graphics/fb0/msm_fb_panel_info", &panel_info)) {
+        PLOG(WARNING) << "Unable to read clover panel information";
+        return;
+    }
+
+    std::string panel_name;
+    for (const auto& line : android::base::Split(panel_info, "\n")) {
+        if (line.find("panel_name=") == 0) {
+            panel_name = android::base::Trim(line.substr(strlen("panel_name=")));
+            break;
+        }
+    }
+
+    const bool is_plus = panel_name == "NT51021_BOE_BOE10";
+    if (!is_plus && panel_name != "NT51021_BOE_BOE") {
+        LOG(WARNING) << "Unknown clover panel: " << panel_name;
+        return;
+    }
+
+    const char* model = is_plus ? "MI PAD 4 PLUS" : "MI PAD 4";
+    const char* density = is_plus ? "265" : "320";
+    property_override("ro.board.variant", is_plus ? "d9p" : "d9");
+    property_override("ro.product.model", model);
+    property_override("ro.product.vendor.model", model);
+    property_override("ro.vendor.product.model", model);
+    property_override("vendor.display.lcd_density", density);
+    // ro.sf.lcd_density is already loaded from vendor/build.prop at this point.
+    property_override("ro.sf.lcd_density", density);
+    property_override("persist.vendor.sys.fp.vendor", is_plus ? "fpc" : "none");
+
+    const std::string acdb_prefix = is_plus
+            ? "/vendor/etc/acdbdata/QRD/sdm660-snd-card-d9p/QRD_D9P_"
+            : "/vendor/etc/acdbdata/QRD/sdm660-snd-card-skush/QRD_SKUSH_";
+    const char* const acdb_files[] = {
+        "Bluetooth_cal.acdb", "General_cal.acdb", "Global_cal.acdb",
+        "Handset_cal.acdb", "Hdmi_cal.acdb", "Headset_cal.acdb",
+        "Speaker_cal.acdb", "workspaceFile.qwsp",
+    };
+    for (size_t i = 0; i < sizeof(acdb_files) / sizeof(acdb_files[0]); ++i) {
+        const std::string prop = "persist.vendor.audio.calfile" + std::to_string(i);
+        const std::string path = acdb_prefix + acdb_files[i];
+        property_override(prop.c_str(), path.c_str());
+    }
+    property_override("persist.vendor.audio.calfile8",
+                      "/vendor/etc/acdbdata/adsp_avs_config.acdb");
+}
+
 /* From Magisk@jni/magiskhide/hide_utils.c */
 static const char *snet_prop_key[] = {
     "ro.boot.vbmeta.device_state",
@@ -144,6 +202,8 @@ void vendor_load_properties()
     property_override("dalvik.vm.heaptargetutilization", heaptargetutilization);
     property_override("dalvik.vm.heapminfree", heapminfree);
     property_override("dalvik.vm.heapmaxfree", heapmaxfree);
+
+    init_clover_properties();
 
     // Preserve adb root and the original build properties on debug builds.
     if (!android::base::GetBoolProperty("ro.debuggable", false)) {
