@@ -145,5 +145,8 @@ void vendor_load_properties()
     property_override("dalvik.vm.heapminfree", heapminfree);
     property_override("dalvik.vm.heapmaxfree", heapmaxfree);
 
-    workaround_snet_properties();
+    // Preserve adb root and the original build properties on debug builds.
+    if (!android::base::GetBoolProperty("ro.debuggable", false)) {
+        workaround_snet_properties();
+    }
 }
